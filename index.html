@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>經典貪吃蛇</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* 防止手機滑動捲動頁面 */
+            background-color: #111827;
+        }
+
+        .retro-font {
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        /* 遊戲畫布邊框發光效果 */
+        #gameCanvas {
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2);
+        }
+
+        /* 虛擬按鈕樣式 */
+        .d-pad-btn {
+            transition: all 0.1s;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .d-pad-btn:active {
+            transform: scale(0.95);
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="h-screen w-full flex flex-col items-center justify-center bg-gray-900 text-white overflow-hidden">
+
+    <!-- 遊戲標題與分數 -->
+    <div class="w-full max-w-md flex justify-between items-center px-4 mb-4">
+        <h1 class="text-xl font-bold text-green-400 flex items-center gap-2">
+            <span>🐍</span> 貪吃蛇
+        </h1>
+        <div class="bg-gray-800 px-4 py-2 rounded-lg border border-gray-700">
+            <span class="text-gray-400 text-sm">分數</span>
+            <span id="scoreEl" class="ml-2 text-xl font-bold text-white retro-font">0</span>
+        </div>
+    </div>
+
+    <!-- 遊戲區域容器 (相對定位用於放置覆蓋層) -->
+    <div class="relative group">
+        <canvas id="gameCanvas" width="400" height="400" class="bg-black rounded-lg border-2 border-gray-700 block"></canvas>
+        
+        <!-- 開始/結束 覆蓋層 -->
+        <div id="uiOverlay" class="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-lg z-10">
+            <h2 id="gameTitle" class="text-4xl font-bold text-green-500 mb-2 retro-font tracking-widest">SNAKE</h2>
+            <p id="finalScore" class="text-gray-300 mb-6 hidden">最終分數: <span class="text-white font-bold">0</span></p>
+            <button id="startBtn" class="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-8 rounded-full shadow-lg transition transform hover:scale-105 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                開始遊戲
+            </button>
+            <p class="mt-4 text-xs text-gray-500">電腦按方向鍵 • 手機按下方按鈕</p>
+        </div>
+    </div>
+
+    <!-- 手機版控制器 (D-Pad) -->
+    <div class="mt-6 grid grid-cols-3 gap-2 w-full max-w-[280px] md:hidden">
+        <div></div>
+        <button class="d-pad-btn w-16 h-16 bg-gray-800 rounded-xl flex items-center justify-center text-2xl border-b-4 border-gray-950" onclick="handleInput('ArrowUp')">⬆️</button>
+        <div></div>
+        
+        <button class="d-pad-btn w-16 h-16 bg-gray-800 rounded-xl flex items-center justify-center text-2xl border-b-4 border-gray-950" onclick="handleInput('ArrowLeft')">⬅️</button>
+        <button class="d-pad-btn w-16 h-16 bg-gray-800 rounded-xl flex items-center justify-center text-2xl border-b-4 border-gray-950" onclick="handleInput('ArrowDown')">⬇️</button>
+        <button class="d-pad-btn w-16 h-16 bg-gray-800 rounded-xl flex items-center justify-center text-2xl border-b-4 border-gray-950" onclick="handleInput('ArrowRight')">➡️</button>
+    </div>
+
+    <!-- 桌面端提示 -->
+    <div class="hidden md:block mt-4 text-gray-500 text-sm">
+        使用鍵盤方向鍵控制移動
+    </div>
+
+    <script>
+        // --- 遊戲設定 ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('scoreEl');
+        const uiOverlay = document.getElementById('uiOverlay');
+        const startBtn = document.getElementById('startBtn');
+        const finalScoreEl = document.getElementById('finalScore');
+        const gameTitle = document.getElementById('gameTitle');
+
+        // 網格設定
+        const tileCount = 20; // 20x20 的網格
+        let tileSize = canvas.width / tileCount - 2; // 格子大小 (減2是為了留一點縫隙)
+        
+        // 響應式畫布大小調整
+        function resizeCanvas() {
+            // 在小螢幕上，畫布寬度設為螢幕寬度的 90% (最大 400px)
+            const maxWidth = Math.min(window.innerWidth - 32, 400);
+            canvas.width = maxWidth;
+            canvas.height = maxWidth;
+            tileSize = canvas.width / tileCount;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // 初始化時執行一次
+
+        // 遊戲變數
+        let speed = 7; // 每秒更新次數 (FPS)
+        let score = 0;
+        let headX = 10;
+        let headY = 10;
+        let velocityX = 0;
+        let velocityY = 0;
+        
+        // 蛇身陣列 (每個部分是一個 {x, y} 物件)
+        class SnakePart {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+        }
+        let snakeParts = [];
+        let tailLength = 2;
+
+        // 食物位置
+        let appleX = 5;
+        let appleY = 5;
+
+        // 遊戲迴圈控制
+        let gameInterval;
+        let isRunning = false;
+        
+        // [修改 1] 輸入緩衝區，解決快速迴轉自殺問題
+        let inputQueue = []; 
+
+        // --- 核心遊戲邏輯 ---
+
+        function startGame() {
+            if (isRunning) return;
+            
+            // 重置變數
+            headX = 10;
+            headY = 10;
+            velocityX = 0;
+            velocityY = 0;
+            snakeParts = [];
+            tailLength = 2;
+            score = 0;
+            speed = 7;
+            inputQueue = []; // 清空輸入緩衝
+            
+            scoreEl.innerText = score;
+            uiOverlay.classList.add('hidden');
+            
+            // 隨機放置蘋果
+            placeApple();
+
+            isRunning = true;
+            drawGame();
+        }
+
+        function gameOver() {
+            isRunning = false;
+            clearTimeout(gameInterval);
+            
+            gameTitle.innerText = "GAME OVER";
+            gameTitle.className = "text-4xl font-bold text-red-500 mb-2 retro-font tracking-widest";
+            
+            finalScoreEl.querySelector('span').innerText = score;
+            finalScoreEl.classList.remove('hidden');
+            
+            startBtn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                再玩一次
+            `;
+            uiOverlay.classList.remove('hidden');
+        }
+
+        function drawGame() {
+            if (!isRunning) return;
+
+            // [修改 1] 每一幀處理一個輸入指令
+            processInputQueue();
+
+            changeSnakePosition();
+            
+            let result = isGameOver();
+            if (result) {
+                return gameOver();
+            }
+
+            clearScreen();
+            checkAppleCollision();
+            drawApple();
+            drawSnake();
+            
+            // 根據分數稍微增加速度，最高不超過 15 FPS
+            let currentSpeed = 7 + Math.floor(score / 5); 
+            if (currentSpeed > 15) currentSpeed = 15;
+
+            gameInterval = setTimeout(drawGame, 1000 / currentSpeed);
+        }
+
+        // [修改 1] 處理輸入緩衝的輔助函式
+        function processInputQueue() {
+            if (inputQueue.length > 0) {
+                const nextDir = inputQueue.shift(); // 取出最早的一個指令
+                
+                if (nextDir === 'up') { velocityX = 0; velocityY = -1; }
+                else if (nextDir === 'down') { velocityX = 0; velocityY = 1; }
+                else if (nextDir === 'left') { velocityX = -1; velocityY = 0; }
+                else if (nextDir === 'right') { velocityX = 1; velocityY = 0; }
+            }
+        }
+
+        function isGameOver() {
+            let gameOver = false;
+
+            // 開始時不動不算輸
+            if (velocityX === 0 && velocityY === 0) return false;
+
+            // 撞牆
+            if (headX < 0 || headX >= tileCount || headY < 0 || headY >= tileCount) {
+                gameOver = true;
+            }
+
+            // 撞自己
+            for (let i = 0; i < snakeParts.length; i++) {
+                let part = snakeParts[i];
+                if (part.x === headX && part.y === headY) {
+                    gameOver = true;
+                    break;
+                }
+            }
+
+            return gameOver;
+        }
+
+        function clearScreen() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawSnake() {
+            // 畫蛇身
+            ctx.fillStyle = '#4ade80'; // green-400
+            for (let i = 0; i < snakeParts.length; i++) {
+                let part = snakeParts[i];
+                // 繪製稍微比格子小的矩形，製造分節效果
+                ctx.fillRect(part.x * tileSize + 1, part.y * tileSize + 1, tileSize - 2, tileSize - 2);
+            }
+
+            // 把頭部位置加入陣列
+            snakeParts.push(new SnakePart(headX, headY));
+            // 如果長度超過限制，移除尾巴
+            while (snakeParts.length > tailLength) {
+                snakeParts.shift();
+            }
+
+            // 畫蛇頭 (稍微不同顏色或亮一點)
+            ctx.fillStyle = '#86efac'; // green-300
+            ctx.fillRect(headX * tileSize + 1, headY * tileSize + 1, tileSize - 2, tileSize - 2);
+            
+            // 畫眼睛 (裝飾用)
+            ctx.fillStyle = 'black';
+            if (velocityX === 1) { // 向右
+                ctx.fillRect(headX * tileSize + tileSize * 0.6, headY * tileSize + tileSize * 0.2, tileSize*0.2, tileSize*0.2);
+                ctx.fillRect(headX * tileSize + tileSize * 0.6, headY * tileSize + tileSize * 0.6, tileSize*0.2, tileSize*0.2);
+            } else if (velocityX === -1) { // 向左
+                ctx.fillRect(headX * tileSize + tileSize * 0.2, headY * tileSize + tileSize * 0.2, tileSize*0.2, tileSize*0.2);
+                ctx.fillRect(headX * tileSize + tileSize * 0.2, headY * tileSize + tileSize * 0.6, tileSize*0.2, tileSize*0.2);
+            } else if (velocityY === -1) { // 向上
+                ctx.fillRect(headX * tileSize + tileSize * 0.2, headY * tileSize + tileSize * 0.2, tileSize*0.2, tileSize*0.2);
+                ctx.fillRect(headX * tileSize + tileSize * 0.6, headY * tileSize + tileSize * 0.2, tileSize*0.2, tileSize*0.2);
+            } else { // 向下或靜止
+                ctx.fillRect(headX * tileSize + tileSize * 0.2, headY * tileSize + tileSize * 0.6, tileSize*0.2, tileSize*0.2);
+                ctx.fillRect(headX * tileSize + tileSize * 0.6, headY * tileSize + tileSize * 0.6, tileSize*0.2, tileSize*0.2);
+            }
+        }
+
+        function changeSnakePosition() {
+            headX = headX + velocityX;
+            headY = headY + velocityY;
+        }
+
+        // [修改 2] 繪製更像蘋果的圖案
+        function drawApple() {
+            let cx = appleX * tileSize + tileSize / 2;
+            let cy = appleY * tileSize + tileSize / 2;
+            let radius = tileSize / 2 - 2;
+
+            // 1. 蘋果本體 (紅色圓形)
+            ctx.fillStyle = '#ef4444'; // red-500
+            ctx.beginPath();
+            // 稍微往下移一點點讓葉子有空間
+            ctx.arc(cx, cy + 1, radius, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // 2. 蒂頭 (咖啡色)
+            ctx.fillStyle = '#8B4513'; // SaddleBrown
+            // 在蘋果頂部畫一個小矩形
+            ctx.fillRect(cx - 1, cy - radius - 2, 2, 4);
+
+            // 3. 葉子 (綠色)
+            ctx.fillStyle = '#4ade80'; // green-400
+            ctx.beginPath();
+            // 畫一個橢圓當葉子
+            ctx.ellipse(cx + 3, cy - radius, 3, 5, Math.PI / 4, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 增加一點高光讓它看起來立體 (選用)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.beginPath();
+            ctx.arc(cx - radius/3, cy - radius/3 + 1, radius/4, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        function checkAppleCollision() {
+            if (appleX === headX && appleY === headY) {
+                appleX = Math.floor(Math.random() * tileCount);
+                appleY = Math.floor(Math.random() * tileCount);
+                
+                // 確保蘋果不會生在蛇身上
+                for (let part of snakeParts) {
+                    if (part.x === appleX && part.y === appleY) {
+                        // 如果重疊，再試一次
+                        checkAppleCollision(); 
+                        return;
+                    }
+                }
+
+                tailLength++;
+                score++;
+                scoreEl.innerText = score;
+                
+                // 視覺反饋 (震動效果 - 這裡簡單模擬)
+                canvas.style.transform = "scale(1.02)";
+                setTimeout(() => canvas.style.transform = "scale(1)", 50);
+            }
+        }
+
+        function placeApple() {
+            appleX = Math.floor(Math.random() * tileCount);
+            appleY = Math.floor(Math.random() * tileCount);
+        }
+
+        // --- 輸入控制 ---
+
+        // 輔助函式：取得當前蛇的邏輯方向 (考慮緩衝區)
+        function getCurrentDirection() {
+            // 如果緩衝區有指令，我們應該依據「最後一個計劃中的指令」來判斷下一個指令是否合法
+            if (inputQueue.length > 0) {
+                return inputQueue[inputQueue.length - 1];
+            }
+            // 如果緩衝區是空的，依據目前的物理速度判斷
+            if (velocityX === 1) return 'right';
+            if (velocityX === -1) return 'left';
+            if (velocityY === 1) return 'down';
+            if (velocityY === -1) return 'up';
+            return ''; // 靜止
+        }
+
+        function handleInput(key) {
+            const direction = key.replace('Arrow', '').toLowerCase(); // 轉成 up, down, left, right
+            const currentDir = getCurrentDirection();
+
+            // 檢查是否為反向移動 (如果是反向則忽略)
+            // 並且檢查是否與當前方向相同 (相同則忽略)
+            
+            if (direction === 'up' && currentDir !== 'down' && currentDir !== 'up') {
+                inputQueue.push('up');
+            }
+            else if (direction === 'down' && currentDir !== 'up' && currentDir !== 'down') {
+                inputQueue.push('down');
+            }
+            else if (direction === 'left' && currentDir !== 'right' && currentDir !== 'left') {
+                inputQueue.push('left');
+            }
+            else if (direction === 'right' && currentDir !== 'left' && currentDir !== 'right') {
+                inputQueue.push('right');
+            }
+
+            // 限制緩衝區大小，避免按太快導致延遲感 (最多存2個指令)
+            if (inputQueue.length > 2) {
+                // 移除多餘的指令，保持隊列短小
+                // 這裡我們只保留最新的2個，但其實標準做法是只允許 push 2個。
+                // 為了簡單，我們這裡不做額外操作，上面的邏輯已經足夠防止過度堆積，
+                // 因為 drawGame 跑得夠快。如果真的想限制，可以這樣：
+                // if (inputQueue.length > 2) inputQueue.pop(); // 丟棄最後加入的
+            }
+        }
+
+        document.body.addEventListener('keydown', (e) => {
+            // 阻止方向鍵捲動頁面
+            if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+                e.preventDefault();
+            }
+            handleInput(e.code);
+        });
+
+        // 按鈕事件監聽
+        startBtn.addEventListener('click', startGame);
+
+        // 初始畫面
+        clearScreen();
+        ctx.fillStyle = '#4ade80';
+        ctx.font = '20px "Press Start 2P"'; // Fallback font handled by CSS
+        ctx.textAlign = 'center';
+        ctx.fillText("Press Start", canvas.width / 2, canvas.height / 2);
+
+    </script>
+</body>
+</html>
